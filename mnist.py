@@ -1,154 +1,92 @@
+import csv
 import torch
 import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
-import matplotlib.pyplot as plt
-import os
-import random
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-from random import sample
-from numpy import asarray
-from PIL import Image
 
-#get data
-def get_array(src):
-    img = Image.open(src)
-    data = []
-    for row in asarray(img):
-        data += list(row)
-    return data
-
-###############################################################################################
-###############################################################################################
-######################################## TESTING DATA #########################################
-###############################################################################################
-###############################################################################################
+def load_data(csv_file, transform=None):
+    with open(csv_file, 'r') as csvfile:
+        csvreader = csv.reader(csvfile)
+        next(csvreader, None)  # skip header
+        
+        images = []
+        labels = []
+        for row in csvreader:
+            labels.append(int(row[0]))
+            image = [float(pixel)/255.0 for pixel in row[1:]]
+            if transform:
+                image = transform(np.array(image)).tolist()
+            images.append(image)
+    return torch.tensor(images, dtype=torch.float32), torch.tensor(labels, dtype=torch.long)
 
 print("...Generating Training Dataset...")
-train_batch = []
-for i in range(10):
-    train_batch += sample([('MNIST/training/' + str(i) + '/' + file, i) for file in os.listdir('MNIST/training/' + str(i))], 1500)
-
-random.shuffle(train_batch)
-
-x_train = []
-y_train = []
-for src, label in train_batch:
-    x_train += [get_array(src)]
-    y_train.append(label)
-
-y_train = torch.Tensor(y_train).type(torch.LongTensor)
-x_train = torch.Tensor(x_train)
-
-print("done\n")
-
-
-###############################################################################################
-###############################################################################################
-######################################## TRAINING DATA ########################################
-###############################################################################################
-###############################################################################################
+x_train, y_train = load_data('mnist/mnist_train.csv')
 
 print("...Generating Testing Dataset...")
-test_batch = []
-for i in range(10):
-    test_batch += sample([('MNIST/testing/' + str(i) + '/' + file, i) for file in os.listdir('MNIST/testing/' + str(i))], 500)
+x_test, y_test = load_data('mnist/mnist_test.csv')
 
-random.shuffle(test_batch)
-
-x_test = []
-y_test = []
-for src, label in test_batch:
-    x_test += [get_array(src)]
-    y_test.append(label)
-
-y_test = torch.Tensor(y_test).type(torch.LongTensor)
-x_test = torch.Tensor(x_test)
-
-print("done\n")
-
-###############################################################################################
-###############################################################################################
-############################################# MODEL ###########################################
-###############################################################################################
-###############################################################################################
-
-print("...Creating Model...")
 # Hyper-parameters
 input_size = 784 # 28x28
 hidden_size = 500 
 num_classes = 10
-num_iters = 250
+batch_size = 64
+num_epochs = 5
 learning_rate = 0.001
 
+train_dataset = TensorDataset(x_train, y_train)
+train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
 
+test_dataset = TensorDataset(x_test, y_test)
+test_loader = DataLoader(dataset=test_dataset, batch_size=batch_size, shuffle=False)
+
+# Model definition
 class NeuralNet(nn.Module):
     def __init__(self, input_size, hidden_size, num_classes):
         super(NeuralNet, self).__init__()
-        self.input_size = input_size
-        self.l1 = nn.Linear(input_size, hidden_size)
-        self.sigmoid1 = nn.Sigmoid()
-        self.l2 = nn.Linear(hidden_size, hidden_size)
-        self.sigmoid2 = nn.Sigmoid()
-        self.l3 = nn.Linear(hidden_size, num_classes)
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, num_classes)
     
     def forward(self, x):
-        out = self.l1(x)
-        out = self.sigmoid1(out)
-        out = self.l2(out)
-        out = self.sigmoid2(out)
-        out = self.l3(out)
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        out = self.relu(out)
+        out = self.fc3(out)
         return out
 
-#Initialize model with loss and optimizer
 model = NeuralNet(input_size, hidden_size, num_classes)
 criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)  
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-print("done\n")
-
-###############################################################################################
-###############################################################################################
-############################################ TRAINING #########################################
-###############################################################################################
-###############################################################################################
-
+# Training the model
 print("...Training Model...")
-# Train the model
-for i in range(num_iters):
-    # Forward pass
-    y_train_pred = model(x_train)
-    loss = criterion(y_train_pred, y_train)
-    
-    # Backward and optimize
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    
-    # Print Training Loss
-    if (i+1) % 10 == 0:
-        print (f'Iteration [{i+1}/{num_iters}], Loss: {loss.item():.6f}')
-print("done\n")
+for epoch in range(num_epochs):
+    for i, (images, labels) in enumerate(train_loader):
+        # Forward pass
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        
+        # Backward and optimize
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        if (i+1) % 100 == 0:
+            print(f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}')
 
-
-###############################################################################################
-###############################################################################################
-############################################# TESTING #########################################
-###############################################################################################
-###############################################################################################
-
-
+# Testing the model
 print("...Testing Model...")
-#Test the model
-num_correct = 0
-num_samples = len(y_test)
+model.eval()  # it will notify all your layers that you are in eval mode, that way, batchnorm or dropout layers will work in eval mode instead of training mode.
+with torch.no_grad():
+    correct = 0
+    total = 0
+    for images, labels in test_loader:
+        outputs = model(images)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
 
-res = model(x_test)
-_, y_test_pred = torch.max(res.data, 1)
-
-for i in range(num_samples):
-    if y_test_pred[i] == y_test[i]:
-        num_correct += 1
-
-acc = 100.0 * num_correct / num_samples
-print(f'Accuracy of the network on the 10000 test images: {acc} %\n')
+print(f'Accuracy of the network on the 10000 test images: {100 * correct / total} %')
